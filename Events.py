@@ -3,8 +3,15 @@ import sys
 import RNS
 import LXMF
 import time
-from RNS.vendor import umsgpack as umsgpack
+import threading
 
+###############
+### WARNING ###
+###############
+# Pickle allows code injection
+# Only import trusted event lists!
+import pickle
+###############
 
 UseReticulumID = True
 
@@ -14,6 +21,9 @@ class LXMEvent:
     self.Text = EventText
     self.Callback = None
     self.Subscribers = {}
+  
+  def toJSON(self):
+    return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=4)
     
   def __str__(self):
     return self.Name
@@ -41,7 +51,8 @@ class LXMEventHandler:
     self.R = RNS.Reticulum()
     self.userdir = os.path.expanduser("~")
     self.EventList = {}
-    
+    self.pending_lookups = []
+    #self.last_lookup = None
     #self.EventList["BIT"] = LXMEvent("BIT","BIT is GO.")
 
     if UseReticulumID:
@@ -54,6 +65,9 @@ class LXMEventHandler:
     else:
       sys.exit("No valid identity configuration found.")
       
+    self.eventdirectory = self.userdir+"/.lxmevents"
+    if not os.path.exists(self.eventdirectory):
+      os.makedirs(self.eventdirectory, exist_ok = True)
     self.L = LXMF.LXMRouter(identity = self.ID, storagepath = self.userdir+"/LXMEvent")
     self.D = self.L.register_delivery_identity(self.ID, display_name=self.display_name)
     
@@ -79,6 +93,8 @@ class LXMEventHandler:
     
   def FireEvent(self,Event, isTest = False):
     E = self.EventList[Event]
+    EC = None
+    isSearching = False
     RNS.log("Firing "+E.Name,RNS.LOG_DEBUG)
     if not E.Callback:
       TextOut = E.Text
@@ -91,27 +107,49 @@ class LXMEventHandler:
     RNS.log(TextOut,RNS.LOG_EXTREME)
     for S in E.Subscribers:
       if not (isTest and E.Subscribers[S].RejectTests):
-        out_hash = bytes.fromhex(E.Subscribers[S].Address)
-        if not RNS.Transport.has_path(out_hash):
-          RNS.log("Destination is not yet known. Requesting path and waiting for announce to arrive...")
-          RNS.Transport.request_path(out_hash)
-          while not RNS.Transport.has_path(out_hash):
-            time.sleep(0.1)
-        
+        isSearching = True
+        #Do Stuff
+        #self.SendMessage(S,E,TextOut,EC)
+        SendThread = threading.Thread(target = self.SendMessage, args=(S,E,TextOut,EC,))
+        SendThread.start()
+    while isSearching:
+      if len(self.L.pending_outbound) > 0:
+        isSearching = False
+      time.sleep(0.5)
+    
+    while len(self.pending_lookups) > 0:
+      time.sleep(1)
 
-        O = RNS.Identity.recall(out_hash)
-        RNS.log(E.Subscribers[S].Address,RNS.LOG_DEBUG)
-        RNS.log("Sending \""+TextOut+"\" to "+str(E.Subscribers[S].Address),RNS.LOG_VERBOSE)
-        OD = RNS.Destination(O, RNS.Destination.OUT, RNS.Destination.SINGLE, "lxmf", "delivery")
-        M = LXMF.LXMessage(OD,self.D,TextOut)
-        if EC and EC.Telemetry:
-          M.fields[LXMF.FIELD_TELEMETRY] = EC.Telemetry
-        self.L.handle_outbound(M)
-      
     while len(self.L.pending_outbound) > 0:
       RNS.log(str(len(self.L.pending_outbound))+" messages to send",RNS.LOG_DEBUG)
       time.sleep(0.5)
     RNS.log("Event "+str(Event)+" success.",RNS.LOG_DEBUG)
+    
+    
+    
+  def SendMessage(self, S, E, TextOut, EC):
+    out_hash = bytes.fromhex(E.Subscribers[S].Address)
+    if not RNS.Transport.has_path(out_hash):
+      RNS.log("Destination is not yet known. Requesting path and waiting for announce to arrive...")
+      RNS.Transport.request_path(out_hash)
+      self.pending_lookups.append(S)
+      LookupTime = time.time()
+      while not RNS.Transport.has_path(out_hash):
+        if (time.time()-LookupTime) > 30:
+          RNS.log("Lookup for "+str(out_hash)+ "failed.")
+          self.pending_lookups.remove(S)
+          return
+        time.sleep(0.1)
+      self.pending_lookups.remove(S)
+    O = RNS.Identity.recall(out_hash)
+    RNS.log(E.Subscribers[S].Address,RNS.LOG_DEBUG)
+    RNS.log("Sending \""+TextOut+"\" to "+str(E.Subscribers[S].Address),RNS.LOG_VERBOSE)
+    OD = RNS.Destination(O, RNS.Destination.OUT, RNS.Destination.SINGLE, "lxmf", "delivery")
+    M = LXMF.LXMessage(OD,self.D,TextOut)
+    if EC and EC.Telemetry:
+      M.fields[LXMF.FIELD_TELEMETRY] = EC.Telemetry
+    self.L.handle_outbound(M)
+      
     
   def FireTestEvent(self,Event):
     self.FireEvent(Event,isTest = True)
@@ -123,11 +161,31 @@ class LXMEventHandler:
       buffer = buffer+(str(EE.Name)+": "+str(len(EE.Subscribers))+"\n")
     return buffer
     
+  def ListEvents(self):
+    buffer = []
+    for E in self.EventList:
+      buffer.append(E)
+    return buffer
+    
   def AddSubscriber(self,Event,Sub):
     if Event not in self.EventList:
       RNS.log("Event "+str(Event)+" does not exist")
       return
     self.EventList[Event].AddSubscriber(Sub)
+    
+  def SaveEvents(self,FileName = "eventlist"):
+    #P = umsgpack.packb(self.EventList)
+    #P = json.dumps(self.EventList)
+    #for L in self.EventList:
+    #  print(self.EventList[L].toJSON())
+    #print(P)
+    pickle.dump(self.EventList,open(self.eventdirectory+"/"+FileName,"wb"))
+    
+  def LoadEvents(self,FileName = "eventlist"):
+    if not os.path.exists(self.eventdirectory+"/"+FileName):
+      return False
+    self.EventList = pickle.load(open(self.eventdirectory+"/"+FileName,"rb"))
+    return True
 
 
   
