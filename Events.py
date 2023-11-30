@@ -4,6 +4,7 @@ import RNS
 import LXMF
 import time
 import threading
+import json
 
 ###############
 ### WARNING ###
@@ -13,7 +14,8 @@ import threading
 import pickle
 ###############
 
-UseReticulumID = True
+UseReticulumID = False
+UseCustomID = True
 
 class LXMEvent:
   def __init__(self, EventName, EventText):
@@ -70,20 +72,89 @@ class LXMEventHandler:
         self.ID = RNS.Identity.from_file(self.identitypath)
       else:
         sys.exit("NomadNet identity not found")
+    if UseCustomID:
+      self.configdir = self.userdir+"/.lxmevents"
+      subpath = self.configdir+"/storage"
+      self.identitypath = self.configdir+"/storage/identity"
+      os.makedirs(subpath,exist_ok = True)
+      if os.path.exists(self.identitypath):
+        self.ID = RNS.Identity.from_file(self.identitypath)
+      else:
+        self.ID = RNS.Identity()
+        self.ID.to_file(self.identitypath)
+        
     else:
       sys.exit("No valid identity configuration found.")
       
     self.eventdirectory = self.userdir+"/.lxmevents"
     if not os.path.exists(self.eventdirectory):
       os.makedirs(self.eventdirectory, exist_ok = True)
-    self.L = LXMF.LXMRouter(identity = self.ID, storagepath = self.userdir+"/LXMEvent")
+    self.triggerdirectory = self.eventdirectory+"/triggers"
+    os.makedirs(self.triggerdirectory, exist_ok = True)
+    #self.eventtemplatedirectory = self.eventdirectory+"/eventinjest"
+    #os.makedirs(self.eventrempldirectory, exist_ok = True)
+    self.L = LXMF.LXMRouter(identity = self.ID, storagepath = self.eventdirectory)
     self.D = self.L.register_delivery_identity(self.ID, display_name=self.display_name)
+    self.L.register_delivery_callback(self.ProcessIncoming)
     
+
+
   def SetCallback(self, Target, CB):
     if Target not in self.EventList:
       RNS.log("Event "+str(Target)+" not in event list.")
       return
     self.EventList[Target].Callback = CB
+    
+  def SweepTriggers(self):
+    Triggers = os.listdir(self.triggerdirectory)
+    for T in Triggers:
+      #print(T)
+      if os.path.isfile(self.triggerdirectory+"/"+T):
+        if T in self.EventList:
+          os.remove(self.triggerdirectory+"/"+T)
+          self.FireEvent(T)
+          print(T)
+          
+  def ProcessIncoming(self,message):
+    M = message.content.decode('utf-8')
+    H = RNS.hexrep(message.source_hash,delimit = False)
+    if H in self.blacklist:
+      return
+    S = Subscriber(H)
+    M = M.split(" ")
+    if len(M) > 0:
+      if M[0] == "STOP":
+        if len(M)== 1:
+          self.SendMessageSimple(S,None,"Requires a single event name to stop. Example: STOP WEATHER90210")
+        elif len(M) > 1:
+          if M[1] in self.EventList:
+            self.RemoveSubscriber(M[1],S)
+            #print("I should unsubscribe from "+M[1])
+          else:
+            self.SendMessageSimple(S,None,"Unknown event: "+M[1]+"\nPlease check your request. Input is case sensitive.")
+      elif M[0] == "JOIN":
+        if len(M)== 1:
+          self.SendMessageSimple(S,None,"Requires a single event name to join. Example: JOIN WEATHER90210")
+        elif len(M) > 1:
+          if M[1] in self.EventList:
+            self.AddSubscriber(M[1],S)
+            #print("I should unsubscribe from "+M[1])
+          else:
+            self.SendMessageSimple(S,None,"Unknown event: "+M[1]+"\nPlease check your request. Input is case sensitive.")
+      elif M[0] == "LIST":
+        buffer = "Available Events:\n\n"
+        for E in self.EventList:
+          buffer = buffer + str(self.EventList[E].Name)+" - "+str(self.EventList[E].Description)+"\n\n"
+        self.SendMessageSimple(S,None,buffer)
+      elif M[0] == "BLACKLIST":
+        #self.blacklist.append(H)
+        self.BlackListAddress(S)
+        print(self.blacklist)
+        #print("I should blacklist this address.")
+      else:
+        self.SendMessageSimple(S,None,"Command not recognized. Commands are case sensitive.\nJOIN <EventName>\n  Receive notifications\nSTOP <Event Name>\n  Stop notifications\nBLACKLIST\n  Permanently stop all messages from this server\nLIST\n  List available events\n\nThis mailbox is unmonitored.")
+    else:
+      print("Error. No content in message. How did you even get here?")
     
   def AddEvent(self, EventName, EventText = "This event has no configured text", EventCallback = None, Overwrite = False):
     E = LXMEvent(EventName,EventText)
@@ -133,12 +204,15 @@ class LXMEventHandler:
       time.sleep(0.5)
     RNS.log("Event "+str(Event)+" success.",RNS.LOG_DEBUG)
     
-    
+  def Announce(self):
+    self.D.announce()
     
   def SendMessage(self, S, E, TextOut, EC):
+    if S in self.blacklist:
+      return
     out_hash = bytes.fromhex(E.Subscribers[S].Address)
     if not RNS.Transport.has_path(out_hash):
-      RNS.log("Destination is not yet known. Requesting path and waiting for announce to arrive...")
+      RNS.log("Destination is not yet known. Requesting path and waiting for announce to arrive...",RNS.LOG_VERBOSE)
       RNS.Transport.request_path(out_hash)
       self.pending_lookups.append(S)
       LookupTime = time.time()
@@ -190,6 +264,14 @@ class LXMEventHandler:
     self.EventList[Event].RemoveSubscriber(Sub)
     self.SaveEvents()
     self.MessageUnsubscription(Event,Sub)
+    
+  def BlackListAddress(self,Sub):
+    for E in self.EventList:
+      self.EventList[E].RemoveSubscriber(Sub)
+    self.MessageBlacklist(None,Sub)
+    self.blacklist.append(Sub.Address)
+    self.SaveEvents()
+
 
   def MessageSubscription(self,Event,Sub):
     SubscribeMessage = "You have been subscribed to the "+Event+" list.\n\nMake sure to trust this source in Sideband to receive notifications.\n\nIf this is in error, your identity may be compromised, but you may send \"STOP "+Event+"\" to unsubscribe or \"BLACKLIST\" to permanently stop all messages to this address."
@@ -197,7 +279,7 @@ class LXMEventHandler:
     SendThread.start()
 
   def MessageUnsubscription(self,Event,Sub):
-    Message = "You have been unsubscribed to the "+Event+" list."
+    Message = "You have been unsubscribed from the "+Event+" list."
     SendThread = threading.Thread(target = self.SendMessageSimple, args=(Sub,Event,Message,))
     SendThread.start()
 
@@ -207,10 +289,10 @@ class LXMEventHandler:
     SendThread.start()
 
   def SendMessageSimple(self,Sub,Event,Message):
+    if Sub.Address in self.blacklist:
+      return
     out_hash = bytes.fromhex(Sub.Address)
-#    SubscribeMessage = "You have been subscribed to the "+Event+" list.\n\nIf this is in error, your identity may be compromised, but you may send \"STOP "+Event+"\" to unsubscribe or \"BLACKLIST\" to permanently stop all messages to this address."
     if not RNS.Transport.has_path(out_hash):
-#      RNS.log("Destination is not yet known. Requesting path and waiting for announce to arrive...")
       RNS.Transport.request_path(out_hash)
       while not RNS.Transport.has_path(out_hash):
         time.sleep(0.1)
@@ -222,17 +304,17 @@ class LXMEventHandler:
 
 
   def SaveEvents(self,FileName = "eventlist"):
-    #P = umsgpack.packb(self.EventList)
-    #P = json.dumps(self.EventList)
-    #for L in self.EventList:
-    #  print(self.EventList[L].toJSON())
-    #print(P)
     pickle.dump(self.EventList,open(self.eventdirectory+"/"+FileName,"wb"))
+    with open(self.eventdirectory+"/blacklist",'w') as f:
+      json.dump(self.blacklist,f)
     
   def LoadEvents(self,FileName = "eventlist"):
     if not os.path.exists(self.eventdirectory+"/"+FileName):
       return False
     self.EventList = pickle.load(open(self.eventdirectory+"/"+FileName,"rb"))
+    if os.path.exists(self.eventdirectory+"/blacklist"):
+      with open(self.eventdirectory+"/blacklist") as f:
+        self.blacklist = json.load(f)
     return True
 
 

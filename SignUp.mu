@@ -24,7 +24,7 @@ def TestCallback():
 # Utility Functions
 
 def DisplayEventClass(EV):
-  if not isAuthed:
+  if not isAuthed or isBlacklisted:
     print(EV)
     print("  "+str(E.EventList[EV].Description)+"\n")
     return
@@ -63,6 +63,10 @@ def MakeBanner():
 def UnidentifiedBanner():
   B = "`B008`cYou are unidentified.\nYou must identify yourself to this system (in the Saved Nodes or Announce window) to change your status.\n`a`b"
   return B
+  
+def BlacklistBanner():
+  B = "`B400`cYou have asked to be blacklisted from this server and will never receive messages from it. There is no automated way to reverse this. Please contact the sysop for options.\n`a`b
+  return B
 
 base_URL = "SignUp.mu"
 useBanner = True
@@ -76,6 +80,7 @@ ID_hex = None
 ID_bytes = None
 Sub_Me = None
 Unsub_Me = None
+isBlacklisted = False
 for e in os.environ:
 #  print(e+", "+os.environ[e])
   if e == "remote_identity":
@@ -107,6 +112,10 @@ if not isAuthed:
 
 E = Events.LXMEventHandler("Testbed Handler")
 E.LoadEvents()
+if LXMF_Address in E.blacklist:
+  isBlacklisted = True
+if isBlacklisted:
+  print(BlacklistBanner())
 if Sub_Me:
   if LXMF_Address:
     S = Events.Subscriber(LXMF_Address)
