@@ -19,6 +19,7 @@ class LXMEvent:
   def __init__(self, EventName, EventText):
     self.Name = EventName
     self.Text = EventText
+    self.Description = "No Description"
     self.Callback = None
     self.Subscribers = {}
   
@@ -32,9 +33,15 @@ class LXMEvent:
     if not Sub.Address:
       RNS.log("No subscriber address found")
       return
-    #Will overwrite the config if it exists, but otherwise should not error
     self.Subscribers[Sub.Address] = Sub
-    
+
+  def RemoveSubscriber(self, Sub):
+    if not Sub.Address:
+      RNS.log("No subscriber address found")
+      return
+    self.Subscribers.pop(Sub.Address,None)
+
+
 class Subscriber:
   def __init__(self, SubbedAddress):
     self.Address = SubbedAddress
@@ -52,6 +59,7 @@ class LXMEventHandler:
     self.userdir = os.path.expanduser("~")
     self.EventList = {}
     self.pending_lookups = []
+    self.blacklist = [] #NYI
     #self.last_lookup = None
     #self.EventList["BIT"] = LXMEvent("BIT","BIT is GO.")
 
@@ -172,7 +180,47 @@ class LXMEventHandler:
       RNS.log("Event "+str(Event)+" does not exist")
       return
     self.EventList[Event].AddSubscriber(Sub)
-    
+    self.SaveEvents()
+    self.MessageSubscription(Event,Sub)
+
+  def RemoveSubscriber(self,Event,Sub):
+    if Event not in self.EventList:
+      RNS.log("Event "+str(Event)+" does not exist")
+      return
+    self.EventList[Event].RemoveSubscriber(Sub)
+    self.SaveEvents()
+    self.MessageUnsubscription(Event,Sub)
+
+  def MessageSubscription(self,Event,Sub):
+    SubscribeMessage = "You have been subscribed to the "+Event+" list.\n\nMake sure to trust this source in Sideband to receive notifications.\n\nIf this is in error, your identity may be compromised, but you may send \"STOP "+Event+"\" to unsubscribe or \"BLACKLIST\" to permanently stop all messages to this address."
+    SendThread = threading.Thread(target = self.SendMessageSimple, args=(Sub,Event,SubscribeMessage,))
+    SendThread.start()
+
+  def MessageUnsubscription(self,Event,Sub):
+    Message = "You have been unsubscribed to the "+Event+" list."
+    SendThread = threading.Thread(target = self.SendMessageSimple, args=(Sub,Event,Message,))
+    SendThread.start()
+
+  def MessageBlacklist(self,Event,Sub):
+    Message = "Per your request, you will recive no further messages from this server."
+    SendThread = threading.Thread(target = self.SendMessageSimple, args=(Sub,Event,Message,))
+    SendThread.start()
+
+  def SendMessageSimple(self,Sub,Event,Message):
+    out_hash = bytes.fromhex(Sub.Address)
+#    SubscribeMessage = "You have been subscribed to the "+Event+" list.\n\nIf this is in error, your identity may be compromised, but you may send \"STOP "+Event+"\" to unsubscribe or \"BLACKLIST\" to permanently stop all messages to this address."
+    if not RNS.Transport.has_path(out_hash):
+#      RNS.log("Destination is not yet known. Requesting path and waiting for announce to arrive...")
+      RNS.Transport.request_path(out_hash)
+      while not RNS.Transport.has_path(out_hash):
+        time.sleep(0.1)
+    O = RNS.Identity.recall(out_hash)
+    OD = RNS.Destination(O, RNS.Destination.OUT, RNS.Destination.SINGLE, "lxmf", "delivery")
+    M = LXMF.LXMessage(OD,self.D,Message)
+    self.L.handle_outbound(M)
+    time.sleep(0.5)
+
+
   def SaveEvents(self,FileName = "eventlist"):
     #P = umsgpack.packb(self.EventList)
     #P = json.dumps(self.EventList)
