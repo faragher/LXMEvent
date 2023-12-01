@@ -17,8 +17,8 @@ import RNS
 # You must define your callbacks or the pickling will fail
 # They can, however, be dummied out
 
-def TestCallback():
-  pass
+#def TestCallback():
+#  pass
   
   
 # Utility Functions

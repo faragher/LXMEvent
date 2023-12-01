@@ -5,6 +5,7 @@ import LXMF
 import time
 import threading
 import json
+import LXMEventsBuiltIn as BuiltIn
 
 ###############
 ### WARNING ###
@@ -111,9 +112,11 @@ class LXMEventHandler:
       #print(T)
       if os.path.isfile(self.triggerdirectory+"/"+T):
         if T in self.EventList:
-          os.remove(self.triggerdirectory+"/"+T)
-          self.FireEvent(T)
+          with open(self.triggerdirectory+"/"+T) as f:
+            J = json.load(f)
+          self.FireEvent(T, payload = J)
           print(T)
+          os.remove(self.triggerdirectory+"/"+T)
           
   def ProcessIncoming(self,message):
     M = message.content.decode('utf-8')
@@ -156,10 +159,12 @@ class LXMEventHandler:
     else:
       print("Error. No content in message. How did you even get here?")
     
-  def AddEvent(self, EventName, EventText = "This event has no configured text", EventCallback = None, Overwrite = False):
+  def AddEvent(self, EventName, EventText = "This event has no configured text", EventCallback = None, Overwrite = False, Description = None):
     E = LXMEvent(EventName,EventText)
     if EventCallback:
       E.Callback = EventCallback
+    if Description:
+      E.Description = Description
     if EventName in self.EventList:
       RNS.log("Event "+str(EventName)+" already exists.")
       if Overwrite:
@@ -170,7 +175,7 @@ class LXMEventHandler:
     else:
       self.EventList[EventName] = E
     
-  def FireEvent(self,Event, isTest = False):
+  def FireEvent(self,Event, isTest = False, payload = None):
     E = self.EventList[Event]
     EC = None
     isSearching = False
@@ -178,7 +183,7 @@ class LXMEventHandler:
     if not E.Callback:
       TextOut = E.Text
     else:
-      EC = E.Callback()
+      EC = E.Callback(payload)
       TextOut = EC.Text
       TelemetryOut = EC.Telemetry
     if isTest:
@@ -228,6 +233,7 @@ class LXMEventHandler:
     RNS.log("Sending \""+TextOut+"\" to "+str(E.Subscribers[S].Address),RNS.LOG_VERBOSE)
     OD = RNS.Destination(O, RNS.Destination.OUT, RNS.Destination.SINGLE, "lxmf", "delivery")
     M = LXMF.LXMessage(OD,self.D,TextOut)
+    M.set_title_from_string(E.Name)
     if EC and EC.Telemetry:
       M.fields[LXMF.FIELD_TELEMETRY] = EC.Telemetry
     self.L.handle_outbound(M)
