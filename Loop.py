@@ -8,10 +8,10 @@ import time
 #  #print(J)
 #  R = "There's been a new release at the "+str(J["event"])+" repository: "+str(J["name"])
 #  return Events.EventReturn(R)
-  
-  
-  
-E = Events.LXMEventHandler("Testbed Handler")
+
+
+
+E = Events.LXMEventHandler("BtB Node Romeo Alerts")
 GH = Events.BuiltIn.GitHubRelease
 
 print("Initializing")
@@ -24,11 +24,17 @@ E.AddEvent("Sideband",EventCallback = GH, Description = "Updates to the Sideband
 
 E.SaveEvents()
 print("Initialization complete. Standing by.")
-  
-  
 
+
+LastTime = time.time()
+AnnounceTime = 360
+E.Announce()
 
 while True:
-  time.sleep(20)
+  if time.time() > LastTime + AnnounceTime:
+    LastTime = time.time()
+    E.Announce()
   E.LoadEvents()
   E.SweepTriggers()
+  time.sleep(20)
+
