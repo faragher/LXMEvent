@@ -10,11 +10,13 @@ import time
 #  return Events.EventReturn(R)
 
 
-
+# Instatniate Event Handler
 E = Events.LXMEventHandler("BtB Node Romeo Alerts")
+
 GH = Events.BuiltIn.GitHubRelease
 
 print("Initializing")
+# Add testing events
 E.AddEvent("RNodeFirmware",EventCallback = GH,Description = "Updates to the RNode Firmware")
 E.AddEvent("LXMF",EventCallback = GH, Description = "LXMF Router Updates")
 E.AddEvent("RNS",EventCallback = GH, Description = "New verions of the Reticulum Network Stack")
@@ -22,15 +24,15 @@ E.AddEvent("NomadNet",EventCallback = GH, Description = "Nomad Network Updates")
 E.AddEvent("Sideband",EventCallback = GH, Description = "Updates to the Sideband client")
 
 
-E.SaveEvents()
+E.SaveEvents() # Save events to file for theoretical loading
 print("Initialization complete. Standing by.")
 
 
 LastTime = time.time()
 AnnounceTime = 360
-E.Announce()
+E.Announce() # Announce on load
 
-while True:
+while True: # Sweep events every 20 seconds and process any active triggers.
   if time.time() > LastTime + AnnounceTime:
     LastTime = time.time()
     E.Announce()

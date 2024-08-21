@@ -3,6 +3,8 @@
 
 This is not finalized or really ready, but is reasonably feeature complete for testing.
 
+Commenting, documentation, and API creation in progress.
+
 This creates a distribution list for event-trigged announcements. Better documentation later
 
 ## Setup:
